@@ -81,13 +81,20 @@ def send_telegram(text: str):
     )
     r.raise_for_status()
 
-# ====== 보유손익(고정폭 정렬 친화) ======
-def pnl_line(name: str, code: str, avg: float, qty: int) -> str:
+# ====== 손익 계산(요약용) ======
+def calc_pnl(code: str, avg: float, qty: int) -> tuple[float, float, float, float]:
+    """
+    returns: (cur, value, pl, pl_pct)
+    """
     cur = get_naver_current_price(code)
     value = cur * qty
     cost = avg * qty
     pl = value - cost
     pl_pct = (cur / avg - 1.0) * 100.0
+    return cur, value, pl, pl_pct
+
+# ====== 보유손익(정렬용 code 블록에 넣을 라인) ======
+def pnl_table_line(name: str, code: str, cur: float, avg: float, qty: int, value: float, pl: float, pl_pct: float) -> str:
     sign = "▲" if pl >= 0 else "▼"
     return (
         f"{name}({code})\n"
@@ -117,29 +124,54 @@ if __name__ == "__main__":
     if (not TEST_MESSAGE) and (abs(kimchi) < TH):
         raise SystemExit(0)
 
-    # 2) 보유손익
-    pnl_411060 = pnl_line("ACE KRX금현물", "411060", 37510, 118)
-    pnl_091160 = pnl_line("KODEX반도체", "091160", 85700, 62)
+    # 2) 보유손익 계산
+    cur_411060, val_411060, pl_411060, plp_411060 = calc_pnl("411060", 37510, 118)
+    cur_091160, val_091160, pl_091160, plp_091160 = calc_pnl("091160", 85700, 62)
+
+    # 3) 보유손익 표(정렬용)
+    line_411060 = pnl_table_line("ACE KRX금현물", "411060", cur_411060, 37510, 118, val_411060, pl_411060, plp_411060)
+    line_091160 = pnl_table_line("KODEX반도체", "091160", cur_091160, 85700, 62, val_091160, pl_091160, plp_091160)
+    lines_hold = "\n".join([line_411060, "", line_091160])
+
+    # 4) 강조(1) 김프 이모지 등급 + 굵게
+    kimchi_abs = abs(kimchi)
+    kimchi_level = "🔥" if kimchi_abs >= TH * 2 else ("🚨" if kimchi_abs >= TH else "✅")
+    kimchi_sign = "▲" if kimchi >= 0 else "▼"
+    kimchi_line = f"{kimchi_level} <b>김프</b>: <b><code>{kimchi_sign} {fmt_pct(kimchi)}</code></b>"
+
+    # 5) 강조(2) 손익 요약 2줄 굵게(표와 별개로)
+    def pnl_icon(pl: float) -> str:
+        return "🟢▲" if pl > 0 else ("🔴▼" if pl < 0 else "⚪")
+
+    summary_411060 = (
+        f"• <b>411060 손익</b>: {pnl_icon(pl_411060)} "
+        f"<b><code>{fmt_won(pl_411060)}</code></b> (<b>{plp_411060:+.2f}%</b>)"
+    )
+    summary_091160 = (
+        f"• <b>091160 손익</b>: {pnl_icon(pl_091160)} "
+        f"<b><code>{fmt_won(pl_091160)}</code></b> (<b>{plp_091160:+.2f}%</b>)"
+    )
 
     now = datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
 
-    # 배지(조건 충족 시)
-    badge = "⚠️" if abs(kimchi) >= TH else "ℹ️"
-    kimchi_sign = "▲" if kimchi >= 0 else "▼"
-
-    lines_hold = "\n".join([pnl_411060, "", pnl_091160])
+    # 상단 배지(조건 충족 시)
+    badge = "⚠️" if kimchi_abs >= TH else "ℹ️"
 
     msg = "\n".join([
         f"{badge} <b>[ALERT]</b> <code>{now}</code>",
         "",
         "<b>■ 금 김프 (국내금 vs 국제금 환산)</b>",
+        kimchi_line,
         f"국제금: <code>{intl_usd_oz:,.2f} USD/oz</code>",
         f"환율:   <code>{usdkrw:,.2f} KRW/USD</code>",
         f"환산:   <code>{intl_krw_g:,.0f} 원/g</code>",
         f"국내금: <code>{dom_g:,.0f} 원/g</code>",
-        f"김프:   <b><code>{kimchi_sign} {fmt_pct(kimchi)}</code></b>",
         "",
-        "<b>■ 보유 손익</b>",
+        "<b>■ 보유 손익(요약)</b>",
+        summary_411060,
+        summary_091160,
+        "",
+        "<b>■ 보유 손익(상세)</b>",
         f"<code>{lines_hold}</code>",
         "",
         f"<b>■ 알림 조건</b>: <code>|금 김프| ≥ {TH:.2f}%</code>",
