@@ -64,24 +64,35 @@ def get_international_gold_usd_per_oz() -> float:
     txt = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
     return num_from(txt, r"([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*USD/OZS")
 
-# ====== 텔레그램 ======
+# ====== 텔레그램 (HTML 모드) ======
 def send_telegram(text: str):
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    r = requests.post(url, data={"chat_id": chat_id, "text": text}, timeout=20)
+    r = requests.post(
+        url,
+        data={
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": "true",
+        },
+        timeout=20,
+    )
     r.raise_for_status()
 
-# ====== 보유손익 ======
+# ====== 보유손익(고정폭 정렬 친화) ======
 def pnl_line(name: str, code: str, avg: float, qty: int) -> str:
     cur = get_naver_current_price(code)
     value = cur * qty
     cost = avg * qty
     pl = value - cost
     pl_pct = (cur / avg - 1.0) * 100.0
+    sign = "▲" if pl >= 0 else "▼"
     return (
-        f"- {name}({code}) 현재 {fmt_won(cur)} / 평단 {fmt_won(avg)} x {qty}주"
-        f" | 평가 {fmt_won(value)} | 손익 {fmt_won(pl)} ({pl_pct:+.2f}%)"
+        f"{name}({code})\n"
+        f"  현재 {fmt_won(cur):>10} | 평단 {fmt_won(avg):>10} x {qty:<3} | 평가 {fmt_won(value):>12}\n"
+        f"  손익 {sign} {fmt_won(pl):>12} ({pl_pct:+6.2f}%)"
     )
 
 if __name__ == "__main__":
@@ -102,31 +113,37 @@ if __name__ == "__main__":
     intl_krw_g = intl_usd_oz * usdkrw / OZ_TO_G
     kimchi = (dom_g - intl_krw_g) / intl_krw_g * 100.0
 
-    # 2) 알림 조건: "금 김프"만 기준
+    # 알림 조건: "금 김프"만 기준
     if (not TEST_MESSAGE) and (abs(kimchi) < TH):
         raise SystemExit(0)
 
-    # 3) 보유손익
+    # 2) 보유손익
     pnl_411060 = pnl_line("ACE KRX금현물", "411060", 37510, 118)
     pnl_091160 = pnl_line("KODEX반도체", "091160", 85700, 62)
 
     now = datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
+
+    # 배지(조건 충족 시)
+    badge = "⚠️" if abs(kimchi) >= TH else "ℹ️"
+    kimchi_sign = "▲" if kimchi >= 0 else "▼"
+
+    lines_hold = "\n".join([pnl_411060, "", pnl_091160])
+
     msg = "\n".join([
-        f"[ALERT] {now}",
+        f"{badge} <b>[ALERT]</b> <code>{now}</code>",
         "",
-        "■ 금 김프(국내금 vs 국제금 환산)",
-        f"- 국제금: {intl_usd_oz:,.2f} USD/oz",
-        f"- 환율: {usdkrw:,.2f} KRW/USD",
-        f"- 국제금 환산: {intl_krw_g:,.0f} 원/g",
-        f"- 국내금: {dom_g:,.0f} 원/g",
-        f"- 김프: {fmt_pct(kimchi)}",
+        "<b>■ 금 김프 (국내금 vs 국제금 환산)</b>",
+        f"국제금: <code>{intl_usd_oz:,.2f} USD/oz</code>",
+        f"환율:   <code>{usdkrw:,.2f} KRW/USD</code>",
+        f"환산:   <code>{intl_krw_g:,.0f} 원/g</code>",
+        f"국내금: <code>{dom_g:,.0f} 원/g</code>",
+        f"김프:   <b><code>{kimchi_sign} {fmt_pct(kimchi)}</code></b>",
         "",
-        "■ 보유 손익",
-        pnl_411060,
-        pnl_091160,
+        "<b>■ 보유 손익</b>",
+        f"<code>{lines_hold}</code>",
         "",
-        f"■ 알림 조건: |금 김프| ≥ {TH:.2f}%",
-        f"(FORCE_RUN={int(FORCE_RUN)}, TEST_MESSAGE={int(TEST_MESSAGE)})",
+        f"<b>■ 알림 조건</b>: <code>|금 김프| ≥ {TH:.2f}%</code>",
+        f"<code>(FORCE_RUN={int(FORCE_RUN)}, TEST_MESSAGE={int(TEST_MESSAGE)})</code>",
     ])
 
     send_telegram(msg)
