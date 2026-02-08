@@ -44,21 +44,32 @@ def get_international_gold_usd_per_oz() -> float:
 def get_ace_411060_price_and_nav() -> tuple[float, float]:
     url = "https://www.aceetf.co.kr/fund/K55101DN7441"
     html = fetch(url)
+    soup = BeautifulSoup(html, "html.parser")
 
-    # 1) (권장) HTML 원문에서 '현재가: 33,020원' / '기준가(NAV)...: 32,919.41원' 패턴 추출
-    m_px = re.search(r"현재가:\s*([0-9,]+)\s*원", html)
-    m_nav = re.search(r"기준가\(NAV\).*?:\s*([0-9,]+(?:\.[0-9]+)?)\s*원", html)
+    # 1) meta description(서버에서 내려오는 요약문) 우선 파싱
+    meta = soup.find("meta", attrs={"name": "description"})
+    if not meta:
+        meta = soup.find("meta", attrs={"property": "og:description"})
+    if meta and meta.get("content"):
+        desc = meta["content"]
+        # 예: "현재가: 33,020원 ; 기준가(NAV)-...: 32,919.41원 ..."
+        m_px = re.search(r"현재가[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*원", desc)
+        nav_list = re.findall(r"기준가\(NAV\)[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*원", desc)
+        if m_px and nav_list:
+            price = float(m_px.group(1).replace(",", ""))
+            nav = float(nav_list[-1].replace(",", ""))
+            return price, nav
 
-    if m_px and m_nav:
+    # 2) meta가 없거나 실패하면 HTML 전체에서 넓게 탐색
+    m_px = re.search(r"현재가[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*원", html)
+    nav_list = re.findall(r"기준가\(NAV\)[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*원", html)
+    if m_px and nav_list:
         price = float(m_px.group(1).replace(",", ""))
-        nav = float(m_nav.group(1).replace(",", ""))
+        nav = float(nav_list[-1].replace(",", ""))
         return price, nav
 
-    # 2) (보조) 혹시 텍스트로도 노출되는 경우를 대비한 fallback
-    txt = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
-    price = num_from(txt, r"현재가\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*원")
-    nav = num_from(txt, r"기준가\(NAV\).*?([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*원")
-    return price, nav
+    raise ValueError("ACE page: price/nav not found (meta+html)")
+
 
 def send_telegram(text: str):
     token = os.environ["TELEGRAM_BOT_TOKEN"]
