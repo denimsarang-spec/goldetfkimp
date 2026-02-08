@@ -42,7 +42,19 @@ def get_international_gold_usd_per_oz() -> float:
     return num_from(txt, r"([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*USD/OZS")
 
 def get_ace_411060_price_and_nav() -> tuple[float, float]:
-    html = fetch("https://www.aceetf.co.kr/fund/K55101DN7441")
+    url = "https://www.aceetf.co.kr/fund/K55101DN7441"
+    html = fetch(url)
+
+    # 1) (권장) HTML 원문에서 '현재가: 33,020원' / '기준가(NAV)...: 32,919.41원' 패턴 추출
+    m_px = re.search(r"현재가:\s*([0-9,]+)\s*원", html)
+    m_nav = re.search(r"기준가\(NAV\).*?:\s*([0-9,]+(?:\.[0-9]+)?)\s*원", html)
+
+    if m_px and m_nav:
+        price = float(m_px.group(1).replace(",", ""))
+        nav = float(m_nav.group(1).replace(",", ""))
+        return price, nav
+
+    # 2) (보조) 혹시 텍스트로도 노출되는 경우를 대비한 fallback
     txt = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
     price = num_from(txt, r"현재가\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*원")
     nav = num_from(txt, r"기준가\(NAV\).*?([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*원")
