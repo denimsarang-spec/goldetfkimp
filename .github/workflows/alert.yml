@@ -14,7 +14,7 @@ on:
         required: false
         default: "0"
       threshold:
-        description: "임계값(기본 1.5). 예: 2.0"
+        description: "금 김프 임계값(기본 1.5). 예: 2.0"
         required: false
         default: "1.5"
 
@@ -42,3 +42,4 @@ jobs:
           TEST_MESSAGE: ${{ inputs.test_message || '0' }}
         run: |
           python alert.py
+
