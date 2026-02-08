@@ -8,7 +8,7 @@ OZ_TO_G = 31.1034768
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
-    "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+    "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.9",
 }
 
 # ====== 장중 체크 ======
@@ -37,7 +37,7 @@ def fmt_won(x: float) -> str:
 def fmt_pct(x: float) -> str:
     return f"{x:+.2f}%"
 
-# ====== 네이버 (주가/ETF NAV) ======
+# ====== 네이버 (현재가) ======
 def get_naver_stock_html(code: str) -> str:
     return fetch(f"https://finance.naver.com/item/main.nhn?code={code}")
 
@@ -47,20 +47,6 @@ def get_naver_current_price(code: str) -> float:
     if not m:
         raise ValueError(f"Naver current price not found for {code}")
     return float(m.group(1).replace(",", ""))
-
-def get_naver_etf_nav_latest(code: str) -> float:
-    html = get_naver_stock_html(code)
-    # 순자산가치 NAV 추이 표의 최신 행(HTML 상 첫 매치)을 사용
-    pattern = r"(\d{4}\.\d{2}\.\d{2})\s+([0-9]{1,3}(?:,[0-9]{3})*)\s+([0-9]{1,3}(?:,[0-9]{3})*)\s+([+\-][0-9.]+%)"
-    m = re.search(pattern, html)
-    if not m:
-        raise ValueError(f"Naver NAV table not found for {code}")
-    return float(m.group(3).replace(",", ""))
-
-def get_etf_price_and_nav_from_naver(code: str) -> tuple[float, float]:
-    price = get_naver_current_price(code)
-    nav = get_naver_etf_nav_latest(code)
-    return price, nav
 
 # ====== 네이버 지표(환율/국내금/국제금) ======
 def get_usdkrw() -> float:
@@ -116,15 +102,11 @@ if __name__ == "__main__":
     intl_krw_g = intl_usd_oz * usdkrw / OZ_TO_G
     kimchi = (dom_g - intl_krw_g) / intl_krw_g * 100.0
 
-    # 2) 411060 (금 ETF) 프리미엄(NAV 대비) — 금 관련이라 유지
-    g_etf_px, g_etf_nav = get_etf_price_and_nav_from_naver("411060")
-    g_etf_prem = (g_etf_px - g_etf_nav) / g_etf_nav * 100.0
-
-    # 3) 알림 조건: "금 김프"만 기준
+    # 2) 알림 조건: "금 김프"만 기준
     if (not TEST_MESSAGE) and (abs(kimchi) < TH):
         raise SystemExit(0)
 
-    # 4) 보유손익
+    # 3) 보유손익
     pnl_411060 = pnl_line("ACE KRX금현물", "411060", 37510, 118)
     pnl_091160 = pnl_line("KODEX반도체", "091160", 85700, 62)
 
@@ -138,9 +120,6 @@ if __name__ == "__main__":
         f"- 국제금 환산: {intl_krw_g:,.0f} 원/g",
         f"- 국내금: {dom_g:,.0f} 원/g",
         f"- 김프: {fmt_pct(kimchi)}",
-        "",
-        "■ 411060(금 ETF) NAV 비교(네이버)",
-        f"- 현재가: {fmt_won(g_etf_px)} / NAV: {fmt_won(g_etf_nav)} / 프리미엄: {fmt_pct(g_etf_prem)}",
         "",
         "■ 보유 손익",
         pnl_411060,
