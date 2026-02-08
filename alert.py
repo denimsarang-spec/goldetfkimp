@@ -6,17 +6,22 @@ from datetime import datetime, time, timezone, timedelta
 KST = timezone(timedelta(hours=9))
 OZ_TO_G = 31.1034768
 
-HEADERS = {"User-Agent": "Mozilla/5.0", "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+}
 
+# ====== 장중 체크 ======
 def is_korean_market_hours() -> bool:
     now = datetime.now(KST)
-    if now.weekday() >= 5:
+    if now.weekday() >= 5:  # 토/일 제외
         return False
     t = now.time()
-    return time(9, 0) <= t <= time(15, 30)
+    return time(9, 0) <= t <= time(15, 30)  # KRX 정규장
 
+# ====== 공통 fetch ======
 def fetch(url: str) -> str:
-    r = requests.get(url, headers=HEADERS, timeout=15)
+    r = requests.get(url, headers=HEADERS, timeout=20)
     r.raise_for_status()
     return r.text
 
@@ -26,6 +31,38 @@ def num_from(text: str, pattern: str) -> float:
         raise ValueError("number not found")
     return float(m.group(1).replace(",", ""))
 
+def fmt_won(x: float) -> str:
+    return f"{int(round(x)):,}"
+
+def fmt_pct(x: float) -> str:
+    return f"{x:+.2f}%"
+
+# ====== 네이버 (주가/ETF NAV) ======
+def get_naver_stock_html(code: str) -> str:
+    return fetch(f"https://finance.naver.com/item/main.nhn?code={code}")
+
+def get_naver_current_price(code: str) -> float:
+    html = get_naver_stock_html(code)
+    m = re.search(r"현재가\s*([0-9]{1,3}(?:,[0-9]{3})*)", html)
+    if not m:
+        raise ValueError(f"Naver current price not found for {code}")
+    return float(m.group(1).replace(",", ""))
+
+def get_naver_etf_nav_latest(code: str) -> float:
+    html = get_naver_stock_html(code)
+    # 순자산가치 NAV 추이 표의 최신 행(HTML 상 첫 매치)을 사용
+    pattern = r"(\d{4}\.\d{2}\.\d{2})\s+([0-9]{1,3}(?:,[0-9]{3})*)\s+([0-9]{1,3}(?:,[0-9]{3})*)\s+([+\-][0-9.]+%)"
+    m = re.search(pattern, html)
+    if not m:
+        raise ValueError(f"Naver NAV table not found for {code}")
+    return float(m.group(3).replace(",", ""))
+
+def get_etf_price_and_nav_from_naver(code: str) -> tuple[float, float]:
+    price = get_naver_current_price(code)
+    nav = get_naver_etf_nav_latest(code)
+    return price, nav
+
+# ====== 네이버 지표(환율/국내금/국제금) ======
 def get_usdkrw() -> float:
     html = fetch("https://m.stock.naver.com/marketindex/exchange/FX_USDKRW")
     txt = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
@@ -41,72 +78,76 @@ def get_international_gold_usd_per_oz() -> float:
     txt = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
     return num_from(txt, r"([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*USD/OZS")
 
-def get_ace_411060_price_and_nav() -> tuple[float, float]:
-    url = "https://www.aceetf.co.kr/fund/K55101DN7441"
-    html = fetch(url)
-    soup = BeautifulSoup(html, "html.parser")
-
-    # 1) meta description(서버에서 내려오는 요약문) 우선 파싱
-    meta = soup.find("meta", attrs={"name": "description"})
-    if not meta:
-        meta = soup.find("meta", attrs={"property": "og:description"})
-    if meta and meta.get("content"):
-        desc = meta["content"]
-        # 예: "현재가: 33,020원 ; 기준가(NAV)-...: 32,919.41원 ..."
-        m_px = re.search(r"현재가[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*원", desc)
-        nav_list = re.findall(r"기준가\(NAV\)[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*원", desc)
-        if m_px and nav_list:
-            price = float(m_px.group(1).replace(",", ""))
-            nav = float(nav_list[-1].replace(",", ""))
-            return price, nav
-
-    # 2) meta가 없거나 실패하면 HTML 전체에서 넓게 탐색
-    m_px = re.search(r"현재가[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*원", html)
-    nav_list = re.findall(r"기준가\(NAV\)[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*원", html)
-    if m_px and nav_list:
-        price = float(m_px.group(1).replace(",", ""))
-        nav = float(nav_list[-1].replace(",", ""))
-        return price, nav
-
-    raise ValueError("ACE page: price/nav not found (meta+html)")
-
-
+# ====== 텔레그램 ======
 def send_telegram(text: str):
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    r = requests.post(url, data={"chat_id": chat_id, "text": text}, timeout=15)
+    r = requests.post(url, data={"chat_id": chat_id, "text": text}, timeout=20)
     r.raise_for_status()
 
-def fmt_pct(x: float) -> str:
-    return f"{x:+.2f}%"
+# ====== 보유손익 ======
+def pnl_line(name: str, code: str, avg: float, qty: int) -> str:
+    cur = get_naver_current_price(code)
+    value = cur * qty
+    cost = avg * qty
+    pl = value - cost
+    pl_pct = (cur / avg - 1.0) * 100.0
+    return (
+        f"- {name}({code}) 현재 {fmt_won(cur)} / 평단 {fmt_won(avg)} x {qty}주"
+        f" | 평가 {fmt_won(value)} | 손익 {fmt_won(pl)} ({pl_pct:+.2f}%)"
+    )
 
 if __name__ == "__main__":
-    FORCE_RUN = os.environ.get("FORCE_RUN", "0") == "1"        # 장중 체크 무시(테스트)
-    TEST_MESSAGE = os.environ.get("TEST_MESSAGE", "0") == "1"  # 조건 무시(테스트)
+    # 테스트 스위치 (workflow_dispatch 입력값으로 제어)
+    FORCE_RUN = os.environ.get("FORCE_RUN", "0") == "1"        # 장중 체크 무시
+    TEST_MESSAGE = os.environ.get("TEST_MESSAGE", "0") == "1"  # 조건 무시(무조건 1회 전송)
 
+    # 장중 아니면 종료 (테스트는 FORCE_RUN=1)
     if (not FORCE_RUN) and (not is_korean_market_hours()):
         raise SystemExit(0)
 
+    TH = float(os.environ.get("KIMCHI_THRESHOLD", "1.5"))
+
+    # 1) 금 김프(국내 vs 국제환산)
     usdkrw = get_usdkrw()
     dom_g = get_domestic_gold_krw_per_g()
     intl_usd_oz = get_international_gold_usd_per_oz()
     intl_krw_g = intl_usd_oz * usdkrw / OZ_TO_G
     kimchi = (dom_g - intl_krw_g) / intl_krw_g * 100.0
 
-    ace_px, ace_nav = get_ace_411060_price_and_nav()
-    ace_prem = (ace_px - ace_nav) / ace_nav * 100.0
+    # 2) 411060 (금 ETF) 프리미엄(NAV 대비) — 금 관련이라 유지
+    g_etf_px, g_etf_nav = get_etf_price_and_nav_from_naver("411060")
+    g_etf_prem = (g_etf_px - g_etf_nav) / g_etf_nav * 100.0
 
-    TH = float(os.environ.get("KIMCHI_THRESHOLD", "1.5"))
-    if (not TEST_MESSAGE) and (abs(kimchi) < TH and abs(ace_prem) < TH):
+    # 3) 알림 조건: "금 김프"만 기준
+    if (not TEST_MESSAGE) and (abs(kimchi) < TH):
         raise SystemExit(0)
+
+    # 4) 보유손익
+    pnl_411060 = pnl_line("ACE KRX금현물", "411060", 37510, 118)
+    pnl_091160 = pnl_line("KODEX반도체", "091160", 85700, 62)
 
     now = datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
     msg = "\n".join([
         f"[ALERT] {now}",
-        f"- 금 김프(국내 vs 국제환산): {fmt_pct(kimchi)}",
-        f"- 411060 프리미엄(NAV): {fmt_pct(ace_prem)}",
-        f"- 조건: |값| ≥ {TH:.2f}%",
-        f"- 테스트: FORCE_RUN={int(FORCE_RUN)}, TEST_MESSAGE={int(TEST_MESSAGE)}",
+        "",
+        "■ 금 김프(국내금 vs 국제금 환산)",
+        f"- 국제금: {intl_usd_oz:,.2f} USD/oz",
+        f"- 환율: {usdkrw:,.2f} KRW/USD",
+        f"- 국제금 환산: {intl_krw_g:,.0f} 원/g",
+        f"- 국내금: {dom_g:,.0f} 원/g",
+        f"- 김프: {fmt_pct(kimchi)}",
+        "",
+        "■ 411060(금 ETF) NAV 비교(네이버)",
+        f"- 현재가: {fmt_won(g_etf_px)} / NAV: {fmt_won(g_etf_nav)} / 프리미엄: {fmt_pct(g_etf_prem)}",
+        "",
+        "■ 보유 손익",
+        pnl_411060,
+        pnl_091160,
+        "",
+        f"■ 알림 조건: |금 김프| ≥ {TH:.2f}%",
+        f"(FORCE_RUN={int(FORCE_RUN)}, TEST_MESSAGE={int(TEST_MESSAGE)})",
     ])
+
     send_telegram(msg)
